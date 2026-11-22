@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="referrer" content="no-referrer">
+  <meta name="liff-id" content="2012743807-j7TEYfX8">
+  <title>注意所見の確認</title>
+  <script charset="utf-8" src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
+  <style>
+    :root{color-scheme:light;--ink:#223d3c;--teal:#126b63;--line:#d6e2df;--muted:#58716d}
+    *{box-sizing:border-box}body{margin:0;background:#f2f7f5;color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"Noto Sans JP","Yu Gothic",sans-serif;line-height:1.65}
+    main{max-width:620px;margin:0 auto;padding:24px 18px calc(28px + env(safe-area-inset-bottom))}
+    .tag{font-size:12px;font-weight:700;letter-spacing:.08em;color:var(--teal)}h1{font-size:26px;line-height:1.4;margin:8px 0 12px}
+    .intro{margin:0 0 18px;color:var(--muted);font-size:14px}.note{font-size:12px;color:var(--muted)}
+    .notice{border-radius:12px;padding:12px 14px;margin:14px 0;background:#e4f1ed;font-size:13px}
+    .urgent{background:#fff0e9;border:1px solid #edb79d;color:#883b20}.urgent strong{display:block;margin-bottom:4px}
+    fieldset{min-width:0;margin:0 0 14px;padding:16px;border:1px solid var(--line);border-radius:16px;background:#fff}
+    legend{float:left;width:100%;padding:0;margin-bottom:12px;font-size:16px;font-weight:700}
+    .choices{clear:both;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+    .choice{position:relative}.choice input{position:absolute;opacity:0;width:1px;height:1px}
+    .choice span{display:flex;align-items:center;justify-content:center;min-height:50px;padding:10px 4px;border:1.5px solid var(--line);border-radius:10px;font-size:15px;font-weight:700;cursor:pointer}
+    .choice input:checked + span{background:var(--teal);color:white;border-color:var(--teal)}
+    .choice input[value="あり"]:checked + span{background:#a34527;border-color:#a34527}
+    .choice input:focus-visible + span{outline:3px solid #d5a643;outline-offset:3px}
+    .choice input:disabled + span{cursor:default;opacity:.6}
+    .toolbar{display:flex;align-items:center;justify-content:space-between;margin:16px 0 12px;gap:12px}
+    #progress{font-size:14px;font-weight:700}.clear{border:0;background:none;color:var(--teal);text-decoration:underline;font-size:13px;cursor:pointer;padding:8px}
+    .send,.close{width:100%;border:0;border-radius:12px;min-height:54px;padding:14px;font:inherit;font-weight:700;background:var(--teal);color:#fff;cursor:pointer}
+    .send:disabled{opacity:.45;cursor:default}.close{margin-top:12px;background:#e1eeea;color:var(--teal)}
+    #status{white-space:pre-wrap;font-size:14px;overflow-wrap:anywhere}#status.error{color:#993c24}
+    #previewOutput{white-space:pre-wrap;font-size:13px;border-radius:12px;background:#fff;padding:16px;border:1px solid var(--line)}
+    [hidden]{display:none!important}button:focus-visible{outline:3px solid #d5a643;outline-offset:3px}
+    @media(max-width:360px){main{padding-left:12px;padding-right:12px}fieldset{padding:14px}.choices{gap:6px}}
+  </style>
+</head>
+<body>
+<main>
+  <div class="tag">訪問看護・観察チェックBot</div>
+  <h1>注意所見の確認</h1>
+  <p class="intro">各項目で「あり・なし・未確認」を1つずつ選んでください。最後にまとめて送信できます。</p>
+  <p class="note">架空事例専用・試作品です。個人情報は入力しないでください。この5項目だけで緊急性は判断できません。</p>
+  <div id="previewNotice" class="notice" hidden>画面プレビューです。LINEへの送信・回答の保存は行いません。</div>
+  <div id="urgent" class="notice urgent" role="alert" hidden>
+    <strong>緊急対応を優先する所見が選択されています</strong>
+    <span id="urgentItems"></span><br>
+    実際の場面では、入力や送信の完了を待たず、共有された療養方針・緊急時指示に沿って対応してください。救急対応が必要な場合は119番通報を遅らせないでください。
+  </div>
+  <form id="warningForm" novalidate>
+    <div id="fields"></div>
+    <div class="toolbar"><span id="progress" aria-live="polite">0 / 5 項目を選択</span><button class="clear" id="clear" type="button">選択をクリア</button></div>
+    <button class="send" id="send" type="submit" disabled>まとめて送信</button>
+    <p class="note">未確認の項目は「未確認」を選んでください。送信前は何度でも選び直せます。開いた時点では何も選択されません。</p>
+  </form>
+  <p id="status" role="status" aria-live="polite">LINEとの接続を確認しています…</p>
+  <pre id="previewOutput" hidden></pre>
+  <button class="close" id="close" type="button" hidden>LINEに戻る</button>
+</main>
+<script>
+'use strict';
+const ITEMS = ['突然の激しい腹痛','持続する激しい腹痛','吐血','下血・黒色便','急な呼吸困難'];
+const VALUES = ['あり','なし','未確認'];
+const HEADER = '【注意所見フォーム回答｜架空事例】';
+const fields = document.getElementById('fields');
+const form = document.getElementById('warningForm');
+const send = document.getElementById('send');
+const clear = document.getElementById('clear');
+const status = document.getElementById('status');
+const preview = location.protocol === 'file:' || new URLSearchParams(location.search).get('preview') === '1';
+let ready = false;
+let busy = false;
+let sent = false;
+let session = '';
+
+ITEMS.forEach(function(label, i) {
+  const fieldset = document.createElement('fieldset');
+  const legend = document.createElement('legend');
+  legend.textContent = label;
+  fieldset.appendChild(legend);
+  const choices = document.createElement('div');
+  choices.className = 'choices';
+  VALUES.forEach(function(value) {
+    const labelElement = document.createElement('label');
+    labelElement.className = 'choice';
+    const input = document.createElement('input');
+    input.type = 'radio'; input.name = 'item' + i; input.value = value; input.required = true;
+    const span = document.createElement('span'); span.textContent = value;
+    labelElement.append(input, span); choices.appendChild(labelElement);
+  });
+  fieldset.appendChild(choices); fields.appendChild(fieldset);
+});
+
+function selected() {
+  return ITEMS.map(function(label, i) {
+    const input = form.querySelector('input[name="item' + i + '"]:checked');
+    return input ? input.value : null;
+  });
+}
+function update() {
+  const answers = selected();
+  const count = answers.filter(Boolean).length;
+  document.getElementById('progress').textContent = count + ' / 5 項目を選択';
+  send.disabled = !ready || count !== ITEMS.length || busy || sent;
+  clear.disabled = busy || sent;
+  const positive = ITEMS.filter(function(label, i) {return answers[i] === 'あり';});
+  document.getElementById('urgent').hidden = positive.length === 0;
+  document.getElementById('urgentItems').textContent = '該当：' + positive.join('／');
+}
+function showStatus(text, error) {
+  status.textContent = text;
+  status.className = error ? 'error' : '';
+}
+form.addEventListener('change', update);
+clear.addEventListener('click', function() {
+  if (busy || sent) return;
+  form.reset(); document.getElementById('previewOutput').hidden = true; update();
+});
+
+async function initialize() {
+  if (preview) {
+    document.getElementById('previewNotice').hidden = false;
+    ready = true; send.textContent = '回答内容を確認（プレビュー）';
+    showStatus('各項目をタップして操作を試せます。'); update(); return;
+  }
+  try {
+    const id = document.querySelector('meta[name="liff-id"]').content;
+    if (!/^\d+-[A-Za-z0-9]+$/.test(id)) throw new Error('入力画面のLIFF IDが未設定です。管理者がindex.htmlのYOUR_LIFF_IDを設定してください。');
+    if (typeof liff === 'undefined') throw new Error('LINEの接続用プログラムを読み込めませんでした。通信を確認し、トークのボタンから開き直してください。');
+    await liff.init({liffId: id});
+    if (!liff.isInClient()) throw new Error('スマートフォンのLINEで、観察チェックBotのトーク内にある「注意所見を開く」から開いてください。');
+    const context = liff.getContext();
+    if (!context || context.type !== 'utou') throw new Error('観察チェックBotとの1対1のトークに戻り、「注意所見」を送って新しく開いてください。');
+    const permission = await liff.permission.query('chat_message.write');
+    if (permission.state !== 'granted') throw new Error('メッセージ送信の許可がありません。LIFF設定のchat_message.writeと利用時の同意を確認してください。');
+    // SDK初期化が終わってからURLを読みます。liff.*のURLは書き換えません。
+    const url = new URL(location.href);
+    session = url.searchParams.get('session') || '';
+    if (!session && url.searchParams.get('liff.state')) {
+      session = new URL(url.searchParams.get('liff.state'), location.origin).searchParams.get('session') || '';
+    }
+    if (!/^[a-fA-F0-9]{32}$/.test(session)) throw new Error('確認番号が見つかりません。トークに「注意所見」を送り、届いたボタンから開き直してください。');
+    ready = true;
+    showStatus('5項目を選ぶと「まとめて送信」を押せます。'); update();
+  } catch (error) {
+    ready = false; showStatus(error.message || '入力画面を開けませんでした。トークから開き直してください。', true); update();
+  }
+}
+
+form.addEventListener('submit', async function(event) {
+  event.preventDefault();
+  if (!ready || busy || sent) return;
+  const answers = selected();
+  if (answers.some(function(value) {return !value;})) {
+    showStatus('すべての項目で「あり・なし・未確認」を選んでください。', true); return;
+  }
+  const rows = ITEMS.map(function(label, i) {return label + '：' + answers[i];});
+  if (preview) {
+    const output = document.getElementById('previewOutput');
+    output.textContent = '選択した回答（送信・保存されません）\n\n' + rows.join('\n');
+    output.hidden = false; showStatus('回答のプレビューです。LINEへの送信は行っていません。'); return;
+  }
+  busy = true;
+  form.querySelectorAll('input').forEach(function(input) {input.disabled = true;});
+  send.textContent = '送信中…'; update(); showStatus('LINEへまとめて送信しています…');
+  try {
+    await liff.sendMessages([{type: 'text', text: HEADER + '\n確認番号：' + session + '\n' + rows.join('\n')}]);
+    sent = true;
+    send.textContent = 'LINEへ送信済み';
+    showStatus('LINEへ送信しました。\nトークに戻り、Botの「5項目の回答を保存しました」という返信を確認してください。');
+    document.getElementById('close').hidden = false;
+  } catch (error) {
+    send.textContent = 'まとめて送信';
+    showStatus('送信を完了できませんでした。通信を確認してください。\nトークに回答が届いていない場合は、この画面から再送できます。\nBotに回答が届いている場合は、先にBotの返信を確認してください。', true);
+    form.querySelectorAll('input').forEach(function(input) {input.disabled = false;});
+  } finally {
+    busy = false; update();
+  }
+});
+document.getElementById('close').addEventListener('click', function() {
+  if (typeof liff !== 'undefined' && liff.isInClient()) liff.closeWindow();
+});
+initialize();
+</script>
+</body>
+</html>
